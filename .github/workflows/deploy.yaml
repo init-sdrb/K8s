@@ -3,7 +3,7 @@ name: Deploy Kubernetes Cluster via Ansible
 on:
   push:
     branches:
-      - main
+      - master
 
 jobs:
   deploy:
