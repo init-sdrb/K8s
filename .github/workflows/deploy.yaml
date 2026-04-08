@@ -22,10 +22,6 @@ jobs:
           ssh-keyscan -H 192.168.21.121 >> ~/.ssh/known_hosts
           ssh-keyscan -H 192.168.21.122 >> ~/.ssh/known_hosts
 
-      - name: Install Ansible (if not already)
-        run: |
-          sudo dnf install -y ansible
-
       - name: Run Ansible Playbook
         run: |
           ansible-playbook -i inventory.ini k8s_cluster_creation.yml
