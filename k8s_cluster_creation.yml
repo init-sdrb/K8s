@@ -1,0 +1,264 @@
+---
+- name: Setup Kubernetes Cluster on Bare Metal
+  hosts: k8s_cluster
+  become: yes
+  tasks:
+
+    # Step 1: Install Dependencies
+    - name: Update and upgrade packages
+      apt:
+        update_cache: yes
+        upgrade: yes
+
+    - name: Add Docker GPG key and repository
+      block:
+        - name: Add Docker GPG key
+          shell: |
+            sudo mkdir -p /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          args:
+            creates: /etc/apt/keyrings/docker.gpg
+
+        - name: Add Docker repository
+          shell: |
+            echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+          args:
+            creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Install required dependencies
+      apt:
+        name:
+          - vim
+          - curl
+          - gnupg2
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - iputils-ping
+          - ufw
+          - containerd.io
+        state: present
+
+    - name: Set hostnames
+      hostname:
+        name: "{{ 'master.deep.local' if inventory_hostname == '192.168.21.120' else 'worker01.deep.local' if inventory_hostname == '192.168.21.121' else 'worker02.deep.local' }}"
+
+    - name: Add cluster entries to /etc/hosts
+      blockinfile:
+        path: /etc/hosts
+        block: |
+          192.168.21.120 master master.deep.local
+          192.168.21.121 worker01 worker01.deep.local
+          192.168.21.122 worker02 worker02.deep.local
+        marker: "# {mark} Added for cluster communication between various nodes"
+
+    - name: Set timezone to Asia/Kathmandu
+      timezone:
+        name: Asia/Kathmandu
+
+    - name: Stop and disable AppArmor
+      service:
+        name: apparmor
+        state: stopped
+        enabled: no
+
+    - name: Enable UFW and allow required ports
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto | default('tcp') }}"
+      loop:
+        - { port: 22 }               # SSH
+        - { port: 6443 }            # Kubernetes API server
+        - { port: 2379 }            # etcd client requests
+        - { port: 2380 }            # etcd peer communication
+        - { port: 10250 }           # Kubelet API
+        - { port: 10251 }           # kube-scheduler
+        - { port: 10252 }           # kube-controller-manager
+        - { port: 8080 }            # Optional for HTTP
+        - { port: 80 }              # HTTP
+        - { port: 443 }             # HTTPS
+        - { port: 179, proto: tcp } # Calico BGP (TCP)
+        - { port: 179, proto: udp } # Calico BGP (UDP)
+      notify: Reload UFW
+
+    - name: Allow port range 30000:32767/tcp
+      shell: |
+        ufw allow 30000:32767/tcp
+      notify: Reload UFW
+
+    # Step 2: Disable Swap and Configure Networking
+    - name: Disable swap
+      command: swapoff -a
+      changed_when: false
+
+    - name: Remove swap entry from /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '.*swap.*'
+        replace: ''
+
+    - name: Ensure br_netfilter module is loaded
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Enable IP forwarding and bridge-nf-call-iptables
+      copy:
+        dest: /etc/sysctl.d/kubernetes.conf
+        content: |
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.bridge.bridge-nf-call-iptables = 1
+          net.ipv4.ip_forward = 1
+      notify: Reload sysctl
+
+    - name: Apply sysctl settings
+      command: sysctl --system
+      changed_when: false
+
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+    # Step 3: Install Kubernetes Components
+    - name: Add Kubernetes apt repository key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
+        state: present
+        filename: kubernetes
+
+    - name: Install specific versions of Kubernetes components
+      apt:
+        name:
+          - kubelet=1.28.15-1.1
+          - kubeadm=1.28.15-1.1
+          - kubectl=1.28.15-1.1
+        state: present
+
+    - name: Hold Kubernetes packages at specific versions
+      shell: |
+        apt-mark hold kubelet kubeadm kubectl containerd.io gnupg2 software-properties-common apt-transport-https ca-certificates
+      changed_when: false
+
+  handlers:
+    - name: Reload UFW
+      command: ufw reload
+
+    - name: Reload sysctl
+      command: sysctl --system
+
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+    - name: Wait for containerd restart
+      command: sleep 5
+      changed_when: false    
+
+- name: Configure containerd on all nodes
+  hosts: k8s_cluster
+  tasks:
+    - name: Generate default containerd config
+      shell: |
+        containerd config default | tee /etc/containerd/config.toml
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Enable SystemdCgroup in containerd config
+      lineinfile:
+        path: /etc/containerd/config.toml
+        regexp: '^\s*SystemdCgroup\s*=\s*false'
+        line: '            SystemdCgroup = true'
+        backup: yes
+      notify: Restart containerd
+
+  handlers:
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+- name: Initialize Kubernetes cluster on master node
+  hosts: master
+  tasks:
+    - name: Pull Kubernetes images
+      command: kubeadm config images pull
+      changed_when: false
+
+    - name: Initialize Kubernetes cluster
+      command: >
+        kubeadm init --pod-network-cidr=192.168.0.0/16 --control-plane-endpoint=master.deep.local --upload-certs
+      register: kubeadm_init
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Fail if kubeadm init fails
+      fail:
+        msg: "kubeadm init failed. Check the logs on the master node."
+      when: kubeadm_init.rc != 0
+
+    - name: Configure kubectl for root user
+      shell: |
+        mkdir -p $HOME/.kube
+        cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        chown $(id -u):$(id -g) $HOME/.kube/config
+      changed_when: false
+
+    - name: Extract token and discovery token hash
+      set_fact:
+        kubeadm_token: "{{ kubeadm_init.stdout | regex_search('--token \\S+') | regex_replace('--token ', '') }}"
+        kubeadm_discovery_token_hash: "{{ kubeadm_init.stdout | regex_search('--discovery-token-ca-cert-hash \\S+') | regex_replace('--discovery-token-ca-cert-hash ', '') }}"
+      when: kubeadm_init.rc == 0
+
+    - name: Construct kubeadm join command
+      set_fact:
+        kubeadm_join_command: >-
+          kubeadm join 192.168.21.120:6443 --token {{ kubeadm_token }} --discovery-token-ca-cert-hash {{ kubeadm_discovery_token_hash }}
+      when: kubeadm_init.rc == 0
+
+- name: Join Worker Nodes to Cluster
+  hosts: workers
+  tasks:
+    - name: Join Kubernetes cluster
+      shell: "{{ hostvars[groups['master'][0]].kubeadm_join_command }}"
+      when: hostvars[groups['master'][0]].kubeadm_join_command is defined
+
+- name: Install Calico Network Plugin
+  hosts: master
+  tasks:
+    - name: Download and apply Calico network plugin
+      shell: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
+      args:
+        executable: /bin/bash
+
+- name: Install Kubernetes Metrics Server
+  hosts: master
+  tasks:
+    - name: Download Metrics Server
+      get_url:
+        url: https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+        dest: /opt/metrics-server.yaml
+
+    - name: Apply Metrics Server
+      shell: kubectl apply -f /opt/metrics-server.yaml
+      args:
+        executable: /bin/bash
+
+  handlers:
+    - name: Enable and start kubelet
+      systemd:
+        name: kubelet
+        enabled: yes
+        state: restarted

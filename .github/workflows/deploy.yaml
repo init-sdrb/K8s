@@ -1,0 +1,31 @@
+name: Deploy Kubernetes Cluster via Ansible
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted   # your AlmaLinux runner
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H 192.168.21.120 >> ~/.ssh/known_hosts
+          ssh-keyscan -H 192.168.21.121 >> ~/.ssh/known_hosts
+          ssh-keyscan -H 192.168.21.122 >> ~/.ssh/known_hosts
+
+      - name: Install Ansible (if not already)
+        run: |
+          sudo dnf install -y ansible
+
+      - name: Run Ansible Playbook
+        run: |
+          ansible-playbook -i inventory.ini k8s_cluster_creation.yml
