@@ -2,30 +2,20 @@
 - name: Setup Kubernetes Cluster on Bare Metal
   hosts: k8s_cluster
   become: yes
+  vars:
+    docker_repo_url: "https://download.docker.com/linux/ubuntu"
+    k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/v1.28/deb/"
   tasks:
 
-    # Step 1: Install Dependencies
+    # -------------------------------
+    # Step 1: Install Basic Dependencies
+    # -------------------------------
     - name: Update and upgrade packages
       apt:
         update_cache: yes
         upgrade: yes
 
-    - name: Add Docker GPG key and repository
-      block:
-        - name: Add Docker GPG key
-          shell: |
-            sudo mkdir -p /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-          args:
-            creates: /etc/apt/keyrings/docker.gpg
-
-        - name: Add Docker repository
-          shell: |
-            echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-          args:
-            creates: /etc/apt/sources.list.d/docker.list
-
-    - name: Install required dependencies
+    - name: Install basic utilities
       apt:
         name:
           - vim
@@ -36,9 +26,37 @@
           - ca-certificates
           - iputils-ping
           - ufw
-          - containerd.io
         state: present
 
+    # -------------------------------
+    # Step 2: Add Docker Repository
+    # -------------------------------
+    - name: Add Docker GPG key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64] {{ docker_repo_url }} $(lsb_release -cs) stable"
+        state: present
+        filename: docker
+
+    - name: Update apt cache after adding Docker repo
+      apt:
+        update_cache: yes
+
+    # -------------------------------
+    # Step 3: Install containerd
+    # -------------------------------
+    - name: Install containerd
+      apt:
+        name: containerd.io
+        state: present
+
+    # -------------------------------
+    # Step 4: Set Hostnames
+    # -------------------------------
     - name: Set hostnames
       hostname:
         name: "{{ 'master.deep.local' if inventory_hostname == '192.168.21.120' else 'worker01.deep.local' if inventory_hostname == '192.168.21.121' else 'worker02.deep.local' }}"
@@ -50,7 +68,7 @@
           192.168.21.120 master master.deep.local
           192.168.21.121 worker01 worker01.deep.local
           192.168.21.122 worker02 worker02.deep.local
-        marker: "# {mark} Added for cluster communication between various nodes"
+        marker: "# {mark} Added for cluster communication between nodes"
 
     - name: Set timezone to Asia/Kathmandu
       timezone:
@@ -62,6 +80,9 @@
         state: stopped
         enabled: no
 
+    # -------------------------------
+    # Step 5: Configure Firewall
+    # -------------------------------
     - name: Enable UFW and allow required ports
       ufw:
         rule: allow
@@ -78,16 +99,20 @@
         - { port: 8080 }            # Optional for HTTP
         - { port: 80 }              # HTTP
         - { port: 443 }             # HTTPS
-        - { port: 179, proto: tcp } # Calico BGP (TCP)
-        - { port: 179, proto: udp } # Calico BGP (UDP)
+        - { port: 179, proto: tcp } # Calico BGP TCP
+        - { port: 179, proto: udp } # Calico BGP UDP
       notify: Reload UFW
 
     - name: Allow port range 30000:32767/tcp
-      shell: |
-        ufw allow 30000:32767/tcp
+      ufw:
+        rule: allow
+        port: 30000:32767
+        proto: tcp
       notify: Reload UFW
 
-    # Step 2: Disable Swap and Configure Networking
+    # -------------------------------
+    # Step 6: Disable Swap and Configure Networking
+    # -------------------------------
     - name: Disable swap
       command: swapoff -a
       changed_when: false
@@ -103,7 +128,7 @@
         name: br_netfilter
         state: present
 
-    - name: Enable IP forwarding and bridge-nf-call-iptables
+    - name: Configure sysctl for Kubernetes networking
       copy:
         dest: /etc/sysctl.d/kubernetes.conf
         content: |
@@ -116,58 +141,9 @@
       command: sysctl --system
       changed_when: false
 
-    - name: Restart containerd
-      systemd:
-        name: containerd
-        state: restarted
-        enabled: yes
-
-    # Step 3: Install Kubernetes Components
-    - name: Add Kubernetes apt repository key
-      shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-    - name: Add Kubernetes apt repository
-      apt_repository:
-        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
-        state: present
-        filename: kubernetes
-
-    - name: Install specific versions of Kubernetes components
-      apt:
-        name:
-          - kubelet=1.28.15-1.1
-          - kubeadm=1.28.15-1.1
-          - kubectl=1.28.15-1.1
-        state: present
-
-    - name: Hold Kubernetes packages at specific versions
-      shell: |
-        apt-mark hold kubelet kubeadm kubectl containerd.io gnupg2 software-properties-common apt-transport-https ca-certificates
-      changed_when: false
-
-  handlers:
-    - name: Reload UFW
-      command: ufw reload
-
-    - name: Reload sysctl
-      command: sysctl --system
-
-    - name: Restart containerd
-      systemd:
-        name: containerd
-        state: restarted
-        enabled: yes
-
-    - name: Wait for containerd restart
-      command: sleep 5
-      changed_when: false    
-
-- name: Configure containerd on all nodes
-  hosts: k8s_cluster
-  tasks:
+    # -------------------------------
+    # Step 7: Configure containerd
+    # -------------------------------
     - name: Generate default containerd config
       shell: |
         containerd config default | tee /etc/containerd/config.toml
@@ -183,15 +159,68 @@
         backup: yes
       notify: Restart containerd
 
-  handlers:
     - name: Restart containerd
       systemd:
         name: containerd
         state: restarted
         enabled: yes
 
-- name: Initialize Kubernetes cluster on master node
+    # -------------------------------
+    # Step 8: Install Kubernetes Components
+    # -------------------------------
+    - name: Add Kubernetes apt repository key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ k8s_repo_url }} /"
+        state: present
+        filename: kubernetes
+
+    - name: Update apt cache after adding Kubernetes repo
+      apt:
+        update_cache: yes
+
+    - name: Install specific versions of Kubernetes components
+      apt:
+        name:
+          - kubelet=1.28.15-1.1
+          - kubeadm=1.28.15-1.1
+          - kubectl=1.28.15-1.1
+        state: present
+
+    - name: Hold Kubernetes and containerd packages
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+          - containerd.io
+        state: present
+        mark_hold: yes
+
+  handlers:
+    - name: Reload UFW
+      command: ufw reload
+
+    - name: Reload sysctl
+      command: sysctl --system
+
+    - name: Restart containerd
+      systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
+
+# -------------------------------
+# Initialize Kubernetes on master
+# -------------------------------
+- name: Initialize Kubernetes Cluster on Master
   hosts: master
+  become: yes
   tasks:
     - name: Pull Kubernetes images
       command: kubeadm config images pull
@@ -201,15 +230,14 @@
       command: >
         kubeadm init --pod-network-cidr=192.168.0.0/16 --control-plane-endpoint=master.deep.local --upload-certs
       register: kubeadm_init
-      changed_when: false
       ignore_errors: yes
 
     - name: Fail if kubeadm init fails
       fail:
-        msg: "kubeadm init failed. Check the logs on the master node."
+        msg: "kubeadm init failed. Check master node logs."
       when: kubeadm_init.rc != 0
 
-    - name: Configure kubectl for root user
+    - name: Configure kubectl for root
       shell: |
         mkdir -p $HOME/.kube
         cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
@@ -228,25 +256,37 @@
           kubeadm join 192.168.21.120:6443 --token {{ kubeadm_token }} --discovery-token-ca-cert-hash {{ kubeadm_discovery_token_hash }}
       when: kubeadm_init.rc == 0
 
+# -------------------------------
+# Join Worker Nodes
+# -------------------------------
 - name: Join Worker Nodes to Cluster
   hosts: workers
+  become: yes
   tasks:
     - name: Join Kubernetes cluster
       shell: "{{ hostvars[groups['master'][0]].kubeadm_join_command }}"
       when: hostvars[groups['master'][0]].kubeadm_join_command is defined
 
+# -------------------------------
+# Install Calico Network Plugin
+# -------------------------------
 - name: Install Calico Network Plugin
   hosts: master
+  become: yes
   tasks:
-    - name: Download and apply Calico network plugin
+    - name: Apply Calico manifest
       shell: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml
       args:
         executable: /bin/bash
 
+# -------------------------------
+# Install Metrics Server
+# -------------------------------
 - name: Install Kubernetes Metrics Server
   hosts: master
+  become: yes
   tasks:
-    - name: Download Metrics Server
+    - name: Download Metrics Server manifest
       get_url:
         url: https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
         dest: /opt/metrics-server.yaml
@@ -256,7 +296,6 @@
       args:
         executable: /bin/bash
 
-  handlers:
     - name: Enable and start kubelet
       systemd:
         name: kubelet
