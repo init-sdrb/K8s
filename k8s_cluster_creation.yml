@@ -32,15 +32,15 @@
     # Step 2: Add Docker Repository
     # -------------------------------
     - name: Add Docker GPG key
-      ansible.builtin.apt_key:
+      ansible.builtin.shell:
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
 
     - name: Add Docker repository
-      ansible.builtin.apt_repository:
-        repo: "deb [arch=amd64] {{ docker_repo_url }} $(lsb_release -cs) stable"
-        state: present
-        filename: docker
+      ansible.builtin.shell:
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+         args:
+           creates: /etc/apt/sources.list.d/docker.list
 
     - name: Update apt cache after adding Docker repo
       apt:
