@@ -295,12 +295,9 @@
   hosts: master
   become: yes   # FIX #1: Added missing become
   tasks:
-    - name: Download Metrics Server manifest
-      get_url:
-        url: https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-        dest: /opt/metrics-server.yaml
-
-    - name: Apply Metrics Server
-      shell: kubectl apply -f /opt/metrics-server.yaml
+    - name: Download and apply Metrics Server manifest
+      shell: |
+        curl -fsSL https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml -o /opt/metrics-server.yaml
+        kubectl apply -f /opt/metrics-server.yaml
       args:
         executable: /bin/bash
