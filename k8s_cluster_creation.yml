@@ -25,7 +25,6 @@
           args:
             creates: /etc/apt/sources.list.d/docker.list
 
-    # FIX #2: Update apt cache after adding Docker repo before installing containerd.io
     - name: Update apt cache after adding Docker repo
       apt:
         update_cache: yes
@@ -67,7 +66,6 @@
         state: stopped
         enabled: no
 
-    # FIX #4: Enable UFW with default deny policy before allowing ports
     - name: Enable UFW with default deny policy
       ufw:
         state: enabled
@@ -108,7 +106,6 @@
         regexp: '.*swap.*'
         replace: ''
 
-    # FIX #3: Load both overlay and br_netfilter kernel modules
     - name: Persist required kernel modules across reboots
       copy:
         dest: /etc/modules-load.d/k8s.conf
@@ -152,7 +149,6 @@
       args:
         creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-    # FIX #6: Added update_cache to refresh apt after adding K8s repo
     - name: Add Kubernetes apt repository
       apt_repository:
         repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
@@ -184,7 +180,7 @@
 # ─────────────────────────────────────────────────────────────
 - name: Configure containerd on all nodes
   hosts: k8s_cluster
-  become: yes   # FIX #1: Added missing become
+  become: yes 
   tasks:
     - name: Generate default containerd config
       shell: containerd config default | tee /etc/containerd/config.toml
@@ -192,7 +188,7 @@
         executable: /bin/bash
       changed_when: false
 
-    # FIX #8: Use replace instead of lineinfile to avoid indentation mismatch
+
     - name: Enable SystemdCgroup in containerd config
       replace:
         path: /etc/containerd/config.toml
@@ -202,7 +198,6 @@
       notify: Restart containerd service
 
   handlers:
-    # FIX #10: Renamed handler to avoid duplicate name collision
     - name: Restart containerd service
       systemd:
         name: containerd
@@ -213,13 +208,13 @@
 # ─────────────────────────────────────────────────────────────
 - name: Initialize Kubernetes cluster on master node
   hosts: master
-  become: yes   # FIX #1: Added missing become
+  become: yes   
   tasks:
     - name: Pull Kubernetes images
       command: kubeadm config images pull
       changed_when: false
 
-    # FIX #12: Guard kubeadm init to make it idempotent
+   
     - name: Check if cluster is already initialized
       stat:
         path: /etc/kubernetes/admin.conf
@@ -232,7 +227,6 @@
         --control-plane-endpoint=master.deep.local
         --upload-certs
       register: kubeadm_init
-      # FIX #7: Removed incorrect changed_when: false
       when: not kubeadm_conf.stat.exists
 
     - name: Fail if kubeadm init fails
@@ -249,7 +243,7 @@
         chown $(id -u):$(id -g) $HOME/.kube/config
       changed_when: false
 
-    # FIX #11: Use kubeadm token create --print-join-command instead of fragile regex
+ 
     - name: Generate kubeadm join command
       command: kubeadm token create --print-join-command
       register: join_command_raw
@@ -263,9 +257,9 @@
 # ─────────────────────────────────────────────────────────────
 - name: Join Worker Nodes to Cluster
   hosts: workers
-  become: yes   # FIX #1: Added missing become
+  become: yes   
   tasks:
-    # FIX #13: Guard worker join to make it idempotent
+
     - name: Check if node is already joined to the cluster
       stat:
         path: /etc/kubernetes/kubelet.conf
@@ -281,9 +275,9 @@
 # ─────────────────────────────────────────────────────────────
 - name: Install Calico Network Plugin
   hosts: master
-  become: yes   # FIX #1: Added missing become
+  become: yes   
   tasks:
-    # FIX #5: Updated to versioned Calico URL (v3.28 compatible with K8s 1.28)
+
     - name: Download and apply Calico network plugin
       shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
       args:
@@ -293,8 +287,7 @@
 # ─────────────────────────────────────────────────────────────
 - name: Install Kubernetes Metrics Server
   hosts: master
-  become: yes   # FIX #1: Added missing become
-  tasks:
+  become: yes   
     - name: Download and apply Metrics Server manifest
       shell: |
         curl -fsSL https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml -o /opt/metrics-server.yaml

@@ -7,8 +7,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted   # your AlmaLinux runner
-
+    runs-on: self-hosted   
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
