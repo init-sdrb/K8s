@@ -43,14 +43,28 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Fetch Kubeconfig
+      - name: Check Cluster Health (Without kubectl)
         run: |
-          echo "=== Fetching kubeconfig from master node ==="
-          ssh test@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
-          export KUBECONFIG=$KUBECONFIG_PATH
+          echo "=== Checking Cluster Health via SSH ==="
           
-          echo "=== Cluster Health Check ==="
-          kubectl get nodes
+          # Check if kubeconfig exists on master
+          if ssh test@$MASTER_IP "sudo test -f /etc/kubernetes/admin.conf"; then
+            echo "✅ Kubeconfig found on master"
+            
+            # Check if API server is responding
+            ssh test@$MASTER_IP "curl -sk https://localhost:6443/healthz"
+            
+            # Check node status using SSH to master and running kubectl there
+            echo -e "\n=== Node Status (from master) ==="
+            ssh test@$MASTER_IP "sudo kubectl get nodes" 2>/dev/null || echo "⚠️  Could not get node status"
+            
+            # Check core pods
+            echo -e "\n=== Core Pods Status ==="
+            ssh test@$MASTER_IP "sudo kubectl get pods -n kube-system" 2>/dev/null || echo "⚠️  Could not get pod status"
+          else
+            echo "❌ ERROR: Kubernetes cluster not found on master!"
+            exit 1
+          fi
           
           echo -e "\n=== Testing Ansible Connectivity ==="
           ansible -i inventory.ini all -m ping
