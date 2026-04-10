@@ -41,7 +41,6 @@ concurrency:
 
 jobs:
 
-# =============== PRE-FLIGHT ===============
   pre-flight:
     name: Pre-flight Checks
     runs-on: self-hosted
