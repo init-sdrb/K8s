@@ -1,5 +1,5 @@
 ---
-- name: Prepare Storage for Harbor Container Registry 
+- name: Prepare Storage for Harbor CR
   hosts: workers
   become: yes
   gather_facts: no
