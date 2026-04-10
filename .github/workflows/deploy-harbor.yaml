@@ -398,9 +398,9 @@ jobs:
   summary:
     name: Deployment Summary
     runs-on: self-hosted
-    needs: [deploy-harbor, uninstall-harbor]
+    needs: [deploy-harbor]  
     if: always()
-    
+  
     steps:
       - name: Generate Summary
         run: |
@@ -408,7 +408,7 @@ jobs:
           echo "         DEPLOYMENT SUMMARY"
           echo "========================================="
           echo ""
-          echo "Workflow Status: deploy-harbor=${{ needs.deploy-harbor.result }}"
+          echo "Workflow Status: ${{ job.status }}"
           echo "Deploy MetalLB: ${{ github.event.inputs.deploy_metallb || 'true' }}"
           echo "Deploy Harbor: ${{ github.event.inputs.deploy_harbor || 'true' }}"
           echo "Harbor Action: ${{ github.event.inputs.harbor_action || 'install' }}"
