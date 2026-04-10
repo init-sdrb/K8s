@@ -39,6 +39,7 @@ concurrency:
   group: harbor-deploy
   cancel-in-progress: true
 
+##Just a test command triggerer
 jobs:
 
   pre-flight:
