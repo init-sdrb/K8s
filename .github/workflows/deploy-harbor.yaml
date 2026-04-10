@@ -1,14 +1,15 @@
----
 name: Deploy Harbor Registry with MetalLB
 
 on:
   push:
-    branches: uat
+    branches:
+      - uat
     paths:
       - 'Harbor/**'
       - 'MetalLB/**'
       - 'prepare-harbor-storage.yml'
       - '.github/workflows/deploy-harbor.yml'
+
   workflow_dispatch:
     inputs:
       deploy_metallb:
@@ -31,388 +32,161 @@ on:
 env:
   KUBECONFIG_PATH: /tmp/kubeconfig-harbor
   MASTER_IP: 192.168.21.120
+  SSH_USER: test
   METALLB_VERSION: "v0.14.5"
   HARBOR_NAMESPACE: harbor
 
+concurrency:
+  group: harbor-deploy
+  cancel-in-progress: true
+
 jobs:
+
+# ================= PRE-FLIGHT =================
   pre-flight:
     name: Pre-flight Checks
     runs-on: self-hosted
-    
+    timeout-minutes: 20
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Local Tools
         run: |
-          echo "=== Setting up local tools ==="
           mkdir -p ~/.local/bin
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-          export PATH="$HOME/.local/bin:$PATH"
 
-      - name: Install kubectl (if needed)
+      - name: Install kubectl
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          
-          if command -v kubectl &> /dev/null; then
-            echo "✅ kubectl found: $(kubectl version --client --short 2>/dev/null || echo 'installed')"
-          else
-            echo "Installing kubectl locally..."
-            KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-            curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-            chmod +x kubectl
-            mv kubectl ~/.local/bin/
-            echo "✅ kubectl installed"
+          if ! command -v kubectl &> /dev/null; then
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl && mv kubectl ~/.local/bin/
           fi
 
-      - name: Install Helm (if needed)
+      - name: Install Helm
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          
-          if command -v helm &> /dev/null; then
-            echo "✅ Helm found: $(helm version --short)"
-          else
-            echo "Installing Helm locally..."
-            HELM_VERSION="v3.20.1"
-            curl -fsSL -o /tmp/helm.tar.gz https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz
+          if ! command -v helm &> /dev/null; then
+            curl -fsSL -o /tmp/helm.tar.gz https://get.helm.sh/helm-v3.20.1-linux-amd64.tar.gz
             tar -xzf /tmp/helm.tar.gz -C /tmp
-            mv /tmp/linux-amd64/helm ~/.local/bin/helm
-            chmod +x ~/.local/bin/helm
-            rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
-            echo "✅ Helm installed"
+            mv /tmp/linux-amd64/helm ~/.local/bin/
           fi
 
       - name: Fetch Kubeconfig
         run: |
-          echo "=== Fetching kubeconfig from master ==="
-          
-          if ssh test@$MASTER_IP "sudo test -f /etc/kubernetes/admin.conf"; then
-            ssh test@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
-            echo "✅ Kubeconfig saved to $KUBECONFIG_PATH"
-          else
-            echo "❌ ERROR: Kubernetes cluster not found on master!"
-            exit 1
-          fi
+          ssh $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
 
-      - name: Check Cluster Health
+      - name: Check Cluster
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Cluster Health Check ==="
-          kubectl cluster-info 2>/dev/null || echo "⚠️  Could not get cluster info"
-          echo ""
-          kubectl get nodes -o wide 2>/dev/null || echo "⚠️  Could not get node status"
-          
-          echo -e "\n=== Core Pods Status ==="
-          kubectl get pods -n kube-system 2>/dev/null || echo "⚠️  Could not get pod status"
+          kubectl get nodes
 
-      - name: Test Ansible Connectivity
-        run: |
-          echo "=== Testing Ansible Connectivity ==="
-          if [ -f "inventory.ini" ]; then
-            ansible -i inventory.ini all -m ping
-          elif [ -f "ansible/harbor-prep/inventory.ini" ]; then
-            cd ansible/harbor-prep
-            ansible -i inventory.ini all -m ping
-          else
-            echo "⚠️  No inventory file found, skipping Ansible test"
-          fi
-
+# ================= STORAGE =================
   prepare-storage:
-    name: Prepare Harbor Storage
     runs-on: self-hosted
     needs: pre-flight
-    
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Run Ansible Storage Preparation
+      - name: Run Ansible Storage Prep
         run: |
-          echo "=== Preparing Harbor Storage on Worker Nodes ==="
-          
-          # Find the correct inventory and playbook
-          if [ -f "prepare-harbor-storage.yml" ]; then
-            ansible-playbook -i inventory.ini prepare-harbor-storage.yml
-          elif [ -f "ansible/harbor-prep/prepare-harbor-storage.yml" ]; then
-            cd ansible/harbor-prep
-            ansible-playbook -i inventory.ini prepare-harbor-storage.yml
-          else
-            echo "❌ Could not find prepare-harbor-storage.yml"
-            exit 1
-          fi
-          
-          if [ $? -eq 0 ]; then
-            echo "✅ Storage directories created successfully"
-          else
-            echo "❌ Storage preparation failed"
-            exit 1
-          fi
+          ansible-playbook -i inventory.ini prepare-harbor-storage.yml
 
-      - name: Verify Directories
-        run: |
-          echo "=== Verifying Directories on Worker01 ==="
-          ssh test@192.168.21.121 "ls -la /data/harbor/" || echo "⚠️  Could not verify worker01"
-          
-          echo -e "\n=== Verifying Directories on Worker02 ==="
-          ssh test@192.168.21.122 "ls -la /data/harbor/" || echo "⚠️  Could not verify worker02"
-
+# ================= METALLB =================
   deploy-metallb:
-    name: Deploy MetalLB
     runs-on: self-hosted
     needs: pre-flight
-    if: github.event.inputs.deploy_metallb != 'false'
-    
+    if: ${{ github.event_name == 'push' || inputs.deploy_metallb }}
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Kubeconfig and Tools
+      - name: Setup Kubeconfig
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          
-          # Fetch kubeconfig
-          ssh test@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
-          export KUBECONFIG=$KUBECONFIG_PATH
+          ssh $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
           echo "KUBECONFIG=$KUBECONFIG_PATH" >> $GITHUB_ENV
-
-      - name: Create MetalLB Namespace
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Creating MetalLB Namespace ==="
-          kubectl apply -f MetalLB/namespace.yaml
 
       - name: Install MetalLB
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Deploying MetalLB $METALLB_VERSION ==="
+
+          kubectl apply -f MetalLB/namespace.yaml
           kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/$METALLB_VERSION/config/manifests/metallb-native.yaml
-          
-          echo "=== Waiting for MetalLB controller ==="
-          kubectl wait --namespace metallb-system \
-            --for=condition=ready pod \
-            --selector=app=metallb \
-            --timeout=120s || true
-          
-          echo "=== MetalLB Pods ==="
-          kubectl get pods -n metallb-system
 
-      - name: Configure MetalLB IP Pools
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Applying MetalLB Configuration ==="
+          kubectl wait --for=condition=Ready pod -n metallb-system --all --timeout=120s
+
           kubectl apply -f MetalLB/metallb-config.yaml
-          
-          sleep 5
-          
-          echo -e "\n=== IP Pool Details ==="
-          kubectl get ipaddresspools -n metallb-system
-          kubectl get l2advertisements -n metallb-system
 
-      - name: Test MetalLB
-        run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Creating Test LoadBalancer ==="
-          
-          cat << EOF | kubectl apply -f -
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: nginx-test
-            namespace: default
-          spec:
-            replicas: 2
-            selector:
-              matchLabels:
-                app: nginx-test
-            template:
-              metadata:
-                labels:
-                  app: nginx-test
-              spec:
-                containers:
-                - name: nginx
-                  image: nginx:alpine
-                  ports:
-                  - containerPort: 80
-          ---
-          apiVersion: v1
-          kind: Service
-          metadata:
-            name: metallb-test
-            namespace: default
-          spec:
-            type: LoadBalancer
-            ports:
-              - port: 80
-                targetPort: 80
-            selector:
-              app: nginx-test
-          EOF
-          
-          echo "Waiting for LoadBalancer IP"
-          for i in {1..30}; do
-            ASSIGNED_IP=$(kubectl get svc metallb-test -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
-            if [ -n "$ASSIGNED_IP" ]; then
-              echo "MetalLB assigned IP: $ASSIGNED_IP"
-              break
-            fi
-            echo "Waiting for IP assignment... ($i/30)"
-            sleep 5
-          done
-          
-          if [ -z "$ASSIGNED_IP" ]; then
-            echo "MetalLB may not have assigned IP yet"
-          fi
-          
-          # Cleanup
-          kubectl delete svc metallb-test --ignore-not-found=true
-          kubectl delete deployment nginx-test --ignore-not-found=true
-          
-          echo "✅ MetalLB setup completed"
-
+# ================= HARBOR =================
   deploy-harbor:
-    name: Deploy Harbor Registry
     runs-on: self-hosted
     needs: [prepare-storage, deploy-metallb]
-    if: github.event.inputs.deploy_harbor != 'false' && github.event.inputs.harbor_action != 'uninstall'
-    
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+    if: ${{ github.event_name == 'push' || inputs.deploy_harbor }}
 
-      - name: Setup Environment
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Kubeconfig
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          
-          # Fetch kubeconfig
-          ssh test@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
-          export KUBECONFIG=$KUBECONFIG_PATH
+          ssh $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
           echo "KUBECONFIG=$KUBECONFIG_PATH" >> $GITHUB_ENV
 
-      - name: Create Harbor Namespace and Storage
+      - name: Setup Harbor Namespace
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Creating Harbor Namespace ==="
           kubectl apply -f Harbor/namespace.yaml
-          
-          echo -e "\n=== Creating Storage Class and PVs ==="
           kubectl apply -f Harbor/storage-class.yaml
-          
-          echo -e "\n=== Verifying PVs ==="
-          kubectl get pv -l app=harbor 2>/dev/null || echo "No PVs created yet"
-          kubectl get storageclass
 
-      - name: Add Harbor Helm Repository
+      - name: Add Helm Repo
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
-          
-          echo "=== Adding Harbor Helm Repository ==="
           helm repo add harbor https://helm.goharbor.io
           helm repo update
 
-      - name: Deploy Harbor with Helm
-        id: harbor_deploy
+      - name: Deploy / Upgrade Harbor
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export KUBECONFIG=$KUBECONFIG_PATH
-          
+
           ACTION="${{ github.event.inputs.harbor_action }}"
-          if [ -z "$ACTION" ]; then
-            ACTION="install"
+          [ -z "$ACTION" ] && ACTION="install"
+
+          if [ "$ACTION" == "uninstall" ]; then
+            helm uninstall harbor -n $HARBOR_NAMESPACE || true
+            exit 0
           fi
-          
-          if [ "$ACTION" == "upgrade" ]; then
-            echo "=== Upgrading Harbor ==="
-            helm upgrade harbor harbor/harbor \
-              -n $HARBOR_NAMESPACE \
-              -f Harbor/harbor-values.yml \
-              --wait \
-              --timeout 15m
-          else
-            echo "=== Installing Harbor ==="
-            helm install harbor harbor/harbor \
-              -n $HARBOR_NAMESPACE \
-              -f Harbor/harbor-values.yml \
-              --create-namespace \
-              --wait \
-              --timeout 15m
-          fi
-          
-          echo "✅ Harbor deployment completed"
+
+          helm upgrade --install harbor harbor/harbor \
+            -n $HARBOR_NAMESPACE \
+            -f Harbor/harbor-values.yml \
+            --create-namespace \
+            --wait \
+            --timeout 15m
 
       - name: Wait for Harbor Pods
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Waiting for Harbor Pods to be Ready ==="
           kubectl wait --for=condition=Ready pods --all -n $HARBOR_NAMESPACE --timeout=600s || true
-          
-          echo -e "\n=== Harbor Pods Status ==="
-          kubectl get pods -n $HARBOR_NAMESPACE -o wide
 
-      - name: Get Harbor Access Information
+      - name: Get Harbor Access
         run: |
-          export PATH="$HOME/.local/bin:$PATH"
           export KUBECONFIG=$KUBECONFIG_PATH
-          
-          echo "=== Harbor Services ==="
-          kubectl get svc -n $HARBOR_NAMESPACE
-          
-          echo -e "\n=== Waiting for LoadBalancer IP ==="
-          for i in {1..30}; do
-            HARBOR_IP=$(kubectl get svc -n $HARBOR_NAMESPACE harbor-harbor-portal -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
-            if [ -n "$HARBOR_IP" ]; then
-              echo "✅ Harbor Portal IP: $HARBOR_IP"
-              break
-            fi
-            echo "Waiting for IP assignment... ($i/30)"
-            sleep 5
-          done
-          
-          echo ""
-          echo "========================================="
-          echo "       HARBOR ACCESS INFORMATION"
-          echo "========================================="
-          echo ""
-          echo "Harbor Portal URL: http://${HARBOR_IP:-$MASTER_IP:30002}"
-          echo ""
+
+          HARBOR_IP=$(kubectl get svc -n $HARBOR_NAMESPACE harbor-harbor-portal \
+            -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
+
+          echo "Harbor URL: http://${HARBOR_IP:-$MASTER_IP:30002}"
           echo "Username: admin"
           echo "Password: Harbor12345"
-          echo "========================================="
 
+# ================= SUMMARY =================
   summary:
-    name: Deployment Summary
     runs-on: self-hosted
-    needs: [deploy-harbor]  
+    needs: [deploy-harbor]
     if: always()
-  
+
     steps:
-      - name: Generate Summary
+      - name: Summary
         run: |
-          echo "========================================="
-          echo "         DEPLOYMENT SUMMARY"
-          echo "========================================="
-          echo ""
           echo "Workflow Status: ${{ job.status }}"
-          echo "Deploy MetalLB: ${{ github.event.inputs.deploy_metallb || 'true' }}"
-          echo "Deploy Harbor: ${{ github.event.inputs.deploy_harbor || 'true' }}"
-          echo "Harbor Action: ${{ github.event.inputs.harbor_action || 'install' }}"
-          echo ""
-          echo "Workflow URL:"
-          echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          echo "========================================="
+          echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
