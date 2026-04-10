@@ -5,7 +5,7 @@
   gather_facts: no
   
   tasks:
-    - name: Create Harbor directories on worker01 (192.168.21.121)
+    - name: Create Harbor directories on worker01
       file:
         path: "/data/harbor/{{ item }}"
         state: directory
@@ -19,7 +19,7 @@
         - database
       when: inventory_hostname == '192.168.21.121'
 
-    - name: Create Harbor directories on worker02 (192.168.21.122)
+    - name: Create Harbor directories on worker02
       file:
         path: "/data/harbor/{{ item }}"
         state: directory
