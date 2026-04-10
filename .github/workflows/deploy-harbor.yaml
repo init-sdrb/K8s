@@ -91,7 +91,7 @@ jobs:
 
       - name: Run Ansible Storage Prep
         run: |
-          ansible-playbook -i inventory.ini prepare-harbor-storage.yml
+          ansible-playbook -i inventory.ini prepare-harbor-storage.yaml
 
 # ================= METALLB =================
   deploy-metallb:
@@ -157,7 +157,7 @@ jobs:
 
           helm upgrade --install harbor harbor/harbor \
             -n $HARBOR_NAMESPACE \
-            -f Harbor/harbor-values.yml \
+            -f Harbor/harbor-values.yaml \
             --create-namespace \
             --wait \
             --timeout 15m
