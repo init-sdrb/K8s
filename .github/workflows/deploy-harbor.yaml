@@ -4,7 +4,7 @@ on:
   push:
     branches: ["uat"]
     paths:
-      - 'Harbor/**'
+      - 'Harbor_Config/**'
       - 'MetalLB/**'
       - 'prepare-harbor-storage.yml'
       - '.github/workflows/deploy-harbor.yml'
