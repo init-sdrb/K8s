@@ -264,7 +264,7 @@ jobs:
           for i in {1..30}; do
             ASSIGNED_IP=$(kubectl get svc metallb-test -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
             if [ -n "$ASSIGNED_IP" ]; then
-              echo "✅ MetalLB assigned IP: $ASSIGNED_IP"
+              echo "MetalLB assigned IP: $ASSIGNED_IP"
               break
             fi
             echo "Waiting for IP assignment... ($i/30)"
@@ -272,7 +272,7 @@ jobs:
           done
           
           if [ -z "$ASSIGNED_IP" ]; then
-            echo "⚠️  MetalLB may not have assigned IP yet"
+            echo "MetalLB may not have assigned IP yet"
           fi
           
           # Cleanup
