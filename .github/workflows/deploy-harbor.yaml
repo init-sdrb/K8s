@@ -2,8 +2,7 @@ name: Deploy Harbor Registry with MetalLB
 
 on:
   push:
-    branches:
-      - uat
+    branches: ["uat"]
     paths:
       - 'Harbor/**'
       - 'MetalLB/**'
