@@ -1,5 +1,5 @@
 ---
-# Harbor Helm Configuration with MetalLB LoadBalancer
+# Harbor Helm Configuration with MetalLB
 expose:
   type: loadBalancer
   tls:
