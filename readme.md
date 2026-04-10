@@ -324,11 +324,11 @@ Automated deployment of Harbor private container registry on a bare-metal Kubern
 │ Self-Hosted Runner (192.168.21.21)                              │
 │ AlmaLinux - Ansible Controller                                  │
 │               ↓ SSH                                             |
-│ ┌──────────────────┼──────────────────┐                         │
+│ ┌──────────────────+──────────────────┐                         │
 │ ↓                  ↓                  ↓                         │
 │ Master Node     Worker Node 1     Worker Node 2                 │
 │ 192.168.21.120 192.168.21.121 192.168.21.122                    │
-│ (Ubuntu) (Ubuntu) (Ubuntu)                                      │
+│ (Ubuntu)          (Ubuntu)        (Ubuntu)                      │
 │                                                                 │
 │ ┌─────────────────────────────────────────────────────────────┐ │
 │ │ Kubernetes Cluster                                          │ │
