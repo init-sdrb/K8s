@@ -6,8 +6,8 @@ on:
     paths:
       - 'Harbor_Config/**'
       - 'MetalLB/**'
-      - 'prepare-harbor-storage.yml'
-      - '.github/workflows/deploy-harbor.yml'
+      - 'prepare-harbor-storage.yaml'
+      - '.github/workflows/deploy-harbor.yaml'
 
   workflow_dispatch:
     inputs:
