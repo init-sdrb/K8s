@@ -260,7 +260,7 @@ jobs:
               app: nginx-test
           EOF
           
-          echo "=== Waiting for LoadBalancer IP ==="
+          echo "Waiting for LoadBalancer IP"
           for i in {1..30}; do
             ASSIGNED_IP=$(kubectl get svc metallb-test -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
             if [ -n "$ASSIGNED_IP" ]; then
