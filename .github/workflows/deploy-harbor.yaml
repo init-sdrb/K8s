@@ -135,8 +135,8 @@ jobs:
       - name: Setup Harbor Namespace
         run: |
           export KUBECONFIG=$KUBECONFIG_PATH
-          kubectl apply -f Harbor/namespace.yaml
-          kubectl apply -f Harbor/storage-class.yaml
+          kubectl apply -f Harbor_Config/namespace.yaml
+          kubectl apply -f Harbor_Config/storage-class.yaml
 
       - name: Add Helm Repo
         run: |
@@ -157,7 +157,7 @@ jobs:
 
           helm upgrade --install harbor harbor/harbor \
             -n $HARBOR_NAMESPACE \
-            -f Harbor/harbor-values.yaml \
+            -f Harbor_Config/harbor-values.yaml \
             --create-namespace \
             --wait \
             --timeout 15m
