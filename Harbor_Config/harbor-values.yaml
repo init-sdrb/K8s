@@ -1,5 +1,5 @@
 ---
-# Harbor Helm Configuration with MetalLB
+# Harbor Helm Configuration with MetalLB and Proper PVC Selectors
 expose:
   type: loadBalancer
   tls:
@@ -26,27 +26,39 @@ persistence:
     registry:
       storageClass: "harbor-local-storage"
       size: 20Gi
-      volumeBindingMode: Immediate
+      selector:
+        matchLabels:
+          harbor.io/component: registry
     chartmuseum:
       storageClass: "harbor-local-storage"
       size: 5Gi
-      volumeBindingMode: Immediate
+      selector:
+        matchLabels:
+          harbor.io/component: chartmuseum
     jobservice:
       storageClass: "harbor-local-storage"
       size: 10Gi
-      volumeBindingMode: Immediate
+      selector:
+        matchLabels:
+          harbor.io/component: jobservice
     database:
       storageClass: "harbor-local-storage"
       size: 20Gi
-      volumeBindingMode: Immediate
+      selector:
+        matchLabels:
+          harbor.io/component: database
     redis:
       storageClass: "harbor-local-storage"
       size: 5Gi
-      volumeBindingMode: Immediate
+      selector:
+        matchLabels:
+          harbor.io/component: redis
     trivy:
       storageClass: "harbor-local-storage"
       size: 5Gi
-      volumeBindingMode: Immediate
+      selector:
+        matchLabels:
+          harbor.io/component: trivy
 
 harborAdminPassword: "Harbor12345"
 
@@ -66,10 +78,6 @@ portal:
   image:
     repository: goharbor/harbor-portal
     tag: v2.10.0
-  service:
-    type: LoadBalancer
-    annotations:
-      metallb.universe.tf/address-pool: primary-pool
 
 core:
   image:
@@ -90,10 +98,6 @@ registry:
     image:
       repository: goharbor/harbor-registryctl
       tag: v2.10.0
-  service:
-    type: LoadBalancer
-    annotations:
-      metallb.universe.tf/address-pool: primary-pool
 
 chartmuseum:
   enabled: true

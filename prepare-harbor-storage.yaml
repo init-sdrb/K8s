@@ -3,9 +3,9 @@
   hosts: workers
   become: yes
   gather_facts: no
-  ##Task comment
+  
   tasks:
-    - name: Create Harbor directories on worker01 Node
+    - name: Create Harbor directories on worker01 (192.168.21.121)
       file:
         path: "/data/harbor/{{ item }}"
         state: directory
@@ -19,7 +19,7 @@
         - database
       when: inventory_hostname == '192.168.21.121'
 
-    - name: Create Harbor directories on worker02 Node
+    - name: Create Harbor directories on worker02 (192.168.21.122)
       file:
         path: "/data/harbor/{{ item }}"
         state: directory

@@ -6,7 +6,7 @@ metadata:
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
 provisioner: kubernetes.io/no-provisioner
-volumeBindingMode: Immediate  # ← CHANGE: From WaitForFirstConsumer to Immediate
+volumeBindingMode: Immediate
 reclaimPolicy: Retain
 allowVolumeExpansion: false
 ---
@@ -17,6 +17,7 @@ metadata:
   labels:
     app: harbor
     component: registry
+    harbor.io/component: registry
 spec:
   capacity:
     storage: 20Gi
@@ -33,7 +34,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01.deep.local  # ← CHANGE: Use FQDN
+          - worker01.deep.local
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -42,6 +43,7 @@ metadata:
   labels:
     app: harbor
     component: chartmuseum
+    harbor.io/component: chartmuseum
 spec:
   capacity:
     storage: 5Gi
@@ -58,7 +60,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01.deep.local  # ← CHANGE
+          - worker01.deep.local
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -67,6 +69,7 @@ metadata:
   labels:
     app: harbor
     component: jobservice
+    harbor.io/component: jobservice
 spec:
   capacity:
     storage: 10Gi
@@ -83,7 +86,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01.deep.local  # ← CHANGE
+          - worker01.deep.local
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -92,6 +95,7 @@ metadata:
   labels:
     app: harbor
     component: database
+    harbor.io/component: database
 spec:
   capacity:
     storage: 20Gi
@@ -108,7 +112,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01.deep.local  # ← CHANGE
+          - worker01.deep.local
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -117,6 +121,7 @@ metadata:
   labels:
     app: harbor
     component: redis
+    harbor.io/component: redis
 spec:
   capacity:
     storage: 5Gi
@@ -133,7 +138,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker02.deep.local  # ← CHANGE
+          - worker02.deep.local
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -142,6 +147,7 @@ metadata:
   labels:
     app: harbor
     component: trivy
+    harbor.io/component: trivy
 spec:
   capacity:
     storage: 5Gi
@@ -158,4 +164,4 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker02.deep.local  
+          - worker02.deep.local

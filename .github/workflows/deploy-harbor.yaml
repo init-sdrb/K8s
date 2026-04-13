@@ -1,3 +1,4 @@
+---
 name: Deploy Harbor Registry with MetalLB
 
 on:
@@ -8,7 +9,6 @@ on:
       - 'MetalLB/**'
       - 'prepare-harbor-storage.yaml'
       - '.github/workflows/deploy-harbor.yaml'
-
   workflow_dispatch:
     inputs:
       deploy_metallb:
@@ -26,6 +26,7 @@ on:
           - install
           - upgrade
           - uninstall
+          - clean-install
         default: install
 
 env:
@@ -39,9 +40,7 @@ concurrency:
   group: harbor-deploy
   cancel-in-progress: true
 
-##Just a test command triggerer
 jobs:
-
   pre-flight:
     name: Pre-flight Checks
     runs-on: self-hosted
@@ -81,8 +80,14 @@ jobs:
           export KUBECONFIG=$KUBECONFIG_PATH
           kubectl get nodes
 
-# ================= STORAGE =================
+      - name: Verify Node Hostnames
+        run: |
+          export KUBECONFIG=$KUBECONFIG_PATH
+          echo "=== Node Hostnames ==="
+          kubectl get nodes -o custom-columns=NAME:.metadata.name,HOSTNAME:.metadata.labels.kubernetes\.io/hostname
+
   prepare-storage:
+    name: Prepare Harbor Storage Directories
     runs-on: self-hosted
     needs: pre-flight
 
@@ -93,8 +98,16 @@ jobs:
         run: |
           ansible-playbook -i inventory.ini prepare-harbor-storage.yaml
 
-# ================= METALLB =================
+      - name: Verify Directories
+        run: |
+          echo "=== Verifying Worker01 Directories ==="
+          ssh $SSH_USER@192.168.21.121 "sudo ls -la /data/harbor/ | head -10"
+          echo ""
+          echo "=== Verifying Worker02 Directories ==="
+          ssh $SSH_USER@192.168.21.122 "sudo ls -la /data/harbor/ | head -10"
+
   deploy-metallb:
+    name: Deploy MetalLB
     runs-on: self-hosted
     needs: pre-flight
     if: ${{ github.event_name == 'push' || inputs.deploy_metallb }}
@@ -110,6 +123,7 @@ jobs:
       - name: Install MetalLB
         run: |
           export KUBECONFIG=$KUBECONFIG_PATH
+          export PATH="$HOME/.local/bin:$PATH"
 
           kubectl apply -f MetalLB/namespace.yaml
           kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/$METALLB_VERSION/config/manifests/metallb-native.yaml
@@ -118,8 +132,8 @@ jobs:
 
           kubectl apply -f MetalLB/metallb-config.yaml
 
-# ================= HARBOR =================
   deploy-harbor:
+    name: Deploy Harbor Registry
     runs-on: self-hosted
     needs: [prepare-storage, deploy-metallb]
     if: ${{ github.event_name == 'push' || inputs.deploy_harbor }}
@@ -132,54 +146,136 @@ jobs:
           ssh $SSH_USER@$MASTER_IP "sudo cat /etc/kubernetes/admin.conf" > $KUBECONFIG_PATH
           echo "KUBECONFIG=$KUBECONFIG_PATH" >> $GITHUB_ENV
 
-      - name: Setup Harbor Namespace
+      - name: Cleanup Previous Installation (if clean-install)
+        if: ${{ inputs.harbor_action == 'clean-install' || inputs.harbor_action == 'uninstall' }}
         run: |
           export KUBECONFIG=$KUBECONFIG_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "=== Cleaning up previous installation ==="
+
+          # Uninstall Harbor
+          helm uninstall harbor -n $HARBOR_NAMESPACE 2>/dev/null || true
+
+          # Delete PVCs
+          kubectl delete pvc --all -n $HARBOR_NAMESPACE --ignore-not-found=true
+
+          # Wait for PVCs to be deleted
+          sleep 5
+
+          # Clear PV claimRefs
+          for pv in $(kubectl get pv -l app=harbor -o name 2>/dev/null); do
+            kubectl patch $pv -p '{"spec":{"claimRef": null}}' --type=merge 2>/dev/null || true
+          done
+
+          echo "✅ Cleanup completed"
+
+      - name: Create Namespace and Storage
+        if: ${{ inputs.harbor_action != 'uninstall' }}
+        run: |
+          export KUBECONFIG=$KUBECONFIG_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "=== Creating Harbor Namespace ==="
           kubectl apply -f Harbor_Config/namespace.yaml
+
+          echo "=== Creating Storage Class and PVs ==="
+          # Delete existing StorageClass first to avoid immutable field errors
+          kubectl delete storageclass harbor-local-storage --ignore-not-found=true
+          sleep 2
+
+          # Apply fresh
           kubectl apply -f Harbor_Config/storage-class.yaml
 
+          echo "=== Verifying PVs ==="
+          kubectl get pv -l app=harbor -o custom-columns=NAME:.metadata.name,COMPONENT:.metadata.labels.component,STATUS:.status.phase
+
       - name: Add Helm Repo
+        if: ${{ inputs.harbor_action != 'uninstall' }}
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           helm repo add harbor https://helm.goharbor.io
           helm repo update
 
-      - name: Deploy / Upgrade Harbor
+      - name: Deploy Harbor
+        if: ${{ inputs.harbor_action != 'uninstall' }}
         run: |
           export KUBECONFIG=$KUBECONFIG_PATH
+          export PATH="$HOME/.local/bin:$PATH"
 
-          ACTION="${{ github.event.inputs.harbor_action }}"
-          [ -z "$ACTION" ] && ACTION="install"
-
-          if [ "$ACTION" == "uninstall" ]; then
-            helm uninstall harbor -n $HARBOR_NAMESPACE || true
-            exit 0
-          fi
-
-          helm upgrade --install harbor harbor/harbor \
+          echo "=== Installing Harbor with PVC Selectors ==="
+          helm install harbor harbor/harbor \
             -n $HARBOR_NAMESPACE \
             -f Harbor_Config/harbor-values.yaml \
             --create-namespace \
             --wait \
-            --timeout 15m
+            --timeout 20m
+
+      - name: Verify PVC Binding
+        if: ${{ inputs.harbor_action != 'uninstall' }}
+        run: |
+          export KUBECONFIG=$KUBECONFIG_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "=== PVC Status ==="
+          kubectl get pvc -n $HARBOR_NAMESPACE
+
+          echo -e "\n=== PV Bindings ==="
+          kubectl get pv -l app=harbor -o custom-columns=PV:.metadata.name,CLAIM:.spec.claimRef.name,COMPONENT:.metadata.labels.component
+
+          echo -e "\n=== Verifying Correct Bindings ==="
+          # Check registry binding
+          REGISTRY_CLAIM=$(kubectl get pv harbor-registry-pv -o jsonpath='{.spec.claimRef.name}')
+          if [[ "$REGISTRY_CLAIM" == "harbor-registry" ]]; then
+            echo "✅ Registry PV correctly bound to $REGISTRY_CLAIM"
+          else
+            echo "❌ Registry PV bound to $REGISTRY_CLAIM (expected: harbor-registry)"
+          fi
+
+          # Check database binding
+          DB_CLAIM=$(kubectl get pv harbor-database-pv -o jsonpath='{.spec.claimRef.name}')
+          if [[ "$DB_CLAIM" == "database-data-harbor-database-0" ]]; then
+            echo "✅ Database PV correctly bound to $DB_CLAIM"
+          else
+            echo "❌ Database PV bound to $DB_CLAIM (expected: database-data-harbor-database-0)"
+          fi
 
       - name: Wait for Harbor Pods
+        if: ${{ inputs.harbor_action != 'uninstall' }}
         run: |
           export KUBECONFIG=$KUBECONFIG_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+
+          echo "=== Waiting for Harbor Pods ==="
           kubectl wait --for=condition=Ready pods --all -n $HARBOR_NAMESPACE --timeout=600s || true
 
+          echo -e "\n=== Pod Status ==="
+          kubectl get pods -n $HARBOR_NAMESPACE -o wide
+
       - name: Get Harbor Access
+        if: ${{ inputs.harbor_action != 'uninstall' }}
         run: |
           export KUBECONFIG=$KUBECONFIG_PATH
+          export PATH="$HOME/.local/bin:$PATH"
 
           HARBOR_IP=$(kubectl get svc -n $HARBOR_NAMESPACE harbor-harbor-portal \
             -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
 
+          echo ""
+          echo "========================================="
+          echo "       HARBOR DEPLOYED SUCCESSFULLY"
+          echo "========================================="
+          echo ""
           echo "Harbor URL: http://${HARBOR_IP:-$MASTER_IP:30002}"
           echo "Username: admin"
           echo "Password: Harbor12345"
+          echo ""
+          echo "Docker Login:"
+          echo "docker login ${HARBOR_IP:-$MASTER_IP}:5000 -u admin -p Harbor12345"
+          echo "========================================="
 
-# ================= SUMMARY =================
   summary:
+    name: Deployment Summary
     runs-on: self-hosted
     needs: [deploy-harbor]
     if: always()
@@ -187,5 +283,15 @@ jobs:
     steps:
       - name: Summary
         run: |
+          echo "========================================="
+          echo "         DEPLOYMENT SUMMARY"
+          echo "========================================="
+          echo ""
           echo "Workflow Status: ${{ job.status }}"
-          echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "Deploy Harbor Status: ${{ needs.deploy-harbor.result }}"
+          echo ""
+          echo "Action: ${{ inputs.harbor_action || 'install' }}"
+          echo ""
+          echo "Workflow URL:"
+          echo "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "========================================="
