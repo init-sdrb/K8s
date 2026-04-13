@@ -4,7 +4,7 @@ Automated deployment of Harbor private container registry on a bare-metal Kubern
 
 ## Infrastructure
 
-| Hostname | IP Address | Role | OS | User |
+| Hostname | IP Address | Role | OS |
 |----------|------------|------|-----|------|
 | runner.deep.local | 192.168.21.21 | GitHub Runner + Ansible Controller | AlmaLinux
 | master.deep.local | 192.168.21.120 | Kubernetes Master | Ubuntu
