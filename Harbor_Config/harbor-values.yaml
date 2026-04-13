@@ -26,21 +26,27 @@ persistence:
     registry:
       storageClass: "harbor-local-storage"
       size: 20Gi
+      volumeBindingMode: Immediate
     chartmuseum:
       storageClass: "harbor-local-storage"
       size: 5Gi
+      volumeBindingMode: Immediate
     jobservice:
       storageClass: "harbor-local-storage"
       size: 10Gi
+      volumeBindingMode: Immediate
     database:
       storageClass: "harbor-local-storage"
       size: 20Gi
+      volumeBindingMode: Immediate
     redis:
       storageClass: "harbor-local-storage"
       size: 5Gi
+      volumeBindingMode: Immediate
     trivy:
       storageClass: "harbor-local-storage"
       size: 5Gi
+      volumeBindingMode: Immediate
 
 harborAdminPassword: "Harbor12345"
 

@@ -6,7 +6,7 @@ metadata:
   annotations:
     storageclass.kubernetes.io/is-default-class: "false"
 provisioner: kubernetes.io/no-provisioner
-volumeBindingMode: WaitForFirstConsumer
+volumeBindingMode: Immediate  # ← CHANGE: From WaitForFirstConsumer to Immediate
 reclaimPolicy: Retain
 allowVolumeExpansion: false
 ---
@@ -33,7 +33,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01
+          - worker01.deep.local  # ← CHANGE: Use FQDN
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -58,7 +58,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01
+          - worker01.deep.local  # ← CHANGE
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -83,7 +83,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01
+          - worker01.deep.local  # ← CHANGE
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -108,7 +108,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker01
+          - worker01.deep.local  # ← CHANGE
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -133,7 +133,7 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker02
+          - worker02.deep.local  # ← CHANGE
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -158,4 +158,4 @@ spec:
         - key: kubernetes.io/hostname
           operator: In
           values:
-          - worker02
+          - worker02.deep.local  
